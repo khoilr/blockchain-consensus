@@ -1,61 +1,167 @@
 import asyncio
 import hashlib
+import os
 import random
 import time
-from pprint import pprint
 
 import matplotlib.pyplot as plt
+import pandas as pd
 import seaborn as sns
 
 from Algorand import Account, Algorand
 from PoW import Miner, ProofOfWork
 from transaction import Transaction
 
+ALGORAND_ENERGY_PER_TRANSACTION = 0.1
+POW_ENERGY_PER_HASH = 0.1
+
 sns.set_theme(style="ticks")
 
 
-def plot(results):
-    # Create a 2x2 subplot structure
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+def plot_comparisons(results):
+    # Create 'images' folder if it doesn't exist
+    if not os.path.exists("images"):
+        os.makedirs("images")
 
-    # First subplot: Block Time Comparison
-    sns.boxplot(
-        data=[results["Algorand"]["tps"], results["PoW"]["tps"]],
-        ax=axes[0, 0],
-    )
-    axes[0, 0].set_title("Block Time Comparison")
-    axes[0, 0].set_xticklabels(["Algorand", "PoW"])
-    axes[0, 0].set_ylabel("Transactions per Second")
+    # Flatten the results list and create a DataFrame
+    df = pd.DataFrame([item for sublist in results for item in sublist])
 
-    # Second subplot: Energy Usage
-    sns.barplot(
-        x=["Algorand", "PoW"],
-        y=[results["Algorand"]["energy_usage"], results["PoW"]["energy_usage"]],
-        ax=axes[0, 1],
-    )
-    axes[0, 1].set_title("Energy Usage")
-    axes[0, 1].set_ylabel("Energy Units")
+    # Set up the plot style
+    sns.set_style("whitegrid")
+    sns.set_palette("deep")
+    plt.rcParams["font.size"] = 12
+    plt.rcParams["axes.labelsize"] = 14
+    plt.rcParams["axes.titlesize"] = 16
+    plt.rcParams["xtick.labelsize"] = 12
+    plt.rcParams["ytick.labelsize"] = 12
 
-    # Third subplot: Decentralization
-    sns.barplot(
-        x=["Algorand", "PoW"],
-        y=[results["Algorand"]["decentralization"], results["PoW"]["decentralization"]],
-        ax=axes[1, 0],
-    )
-    axes[1, 0].set_title("Decentralization")
-    axes[1, 0].set_ylabel("Number of Participants")
+    # 1. Performance metrics across different scales
+    metrics = ["avg_time", "avg_energy", "avg_tps"]
+    fig, axes = plt.subplots(3, 1, figsize=(15, 20))
+    fig.suptitle("Performance Metrics Across Different Scales", fontsize=20)
 
-    # Fourth subplot: TPS Over Time
-    sns.lineplot(data=results["Algorand"]["tps"], label="Algorand", ax=axes[1, 1])
-    sns.lineplot(data=results["PoW"]["tps"], label="PoW", ax=axes[1, 1])
-    axes[1, 1].set_title("TPS Over Time")
-    axes[1, 1].set_xlabel("Block Number")
-    axes[1, 1].set_ylabel("Transactions per Second")
-    axes[1, 1].legend()
+    for i, metric in enumerate(metrics):
+        sns.lineplot(data=df, x="num_miners", y=metric, hue="consensus", style="num_blocks", markers=True, ax=axes[i])
+        axes[i].set_title(f'{metric.replace("_", " ").title()} vs Number of Miners')
+        axes[i].set_xlabel("Number of Miners")
+        axes[i].set_ylabel(metric.replace("_", " ").title())
+        axes[i].set_xscale("log")
+        axes[i].set_yscale("log")  # Use log scale for y-axis
+        axes[i].legend(title="Consensus (Blocks)", bbox_to_anchor=(1.05, 1), loc="upper left")
 
-    # Adjust the layout
     plt.tight_layout()
-    plt.show()
+    plt.savefig("images/performance_metrics.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # 2. Scalability comparison
+    fig, axes = plt.subplots(2, 2, figsize=(20, 20))
+    fig.suptitle("Scalability Comparison", fontsize=20)
+
+    for ax in axes.flatten():
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+
+    sns.scatterplot(
+        data=df, x="num_miners", y="total_time", hue="consensus", size="num_blocks", sizes=(20, 500), ax=axes[0, 0]
+    )
+    axes[0, 0].set_title("Total Time vs Number of Miners")
+    axes[0, 0].set_xlabel("Number of Miners")
+    axes[0, 0].set_ylabel("Total Time (s)")
+
+    sns.scatterplot(
+        data=df, x="num_miners", y="total_energy", hue="consensus", size="num_blocks", sizes=(20, 500), ax=axes[0, 1]
+    )
+    axes[0, 1].set_title("Total Energy vs Number of Miners")
+    axes[0, 1].set_xlabel("Number of Miners")
+    axes[0, 1].set_ylabel("Total Energy (kWh)")
+
+    sns.scatterplot(
+        data=df, x="num_blocks", y="total_time", hue="consensus", size="num_miners", sizes=(20, 500), ax=axes[1, 0]
+    )
+    axes[1, 0].set_title("Total Time vs Number of Blocks")
+    axes[1, 0].set_xlabel("Number of Blocks")
+    axes[1, 0].set_ylabel("Total Time (s)")
+
+    sns.scatterplot(
+        data=df, x="num_blocks", y="total_energy", hue="consensus", size="num_miners", sizes=(20, 500), ax=axes[1, 1]
+    )
+    axes[1, 1].set_title("Total Energy vs Number of Blocks")
+    axes[1, 1].set_xlabel("Number of Blocks")
+    axes[1, 1].set_ylabel("Total Energy (kWh)")
+
+    plt.tight_layout()
+    plt.savefig("images/scalability_comparison.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # 3. Efficiency comparison
+    plt.figure(figsize=(15, 10))
+    sns.scatterplot(
+        data=df, x="avg_time", y="avg_energy", hue="consensus", size="num_miners", style="num_blocks", sizes=(20, 500)
+    )
+    plt.title("Efficiency Comparison: Average Time vs Average Energy")
+    plt.xlabel("Average Time per Block (s)")
+    plt.ylabel("Average Energy per Block (kWh)")
+    plt.xscale("log")
+    plt.yscale("log")
+    plt.legend(title="Consensus (Miners, Blocks)", bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.tight_layout()
+    plt.savefig("images/efficiency_comparison.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # 4. TPS comparison
+    plt.figure(figsize=(15, 10))
+    sns.boxenplot(data=df, x="consensus", y="avg_tps", hue="num_blocks")
+    plt.title("TPS Comparison Across Consensus Mechanisms and Block Numbers")
+    plt.xlabel("Consensus Mechanism")
+    plt.ylabel("Average TPS")
+    plt.yscale("log")  # Use log scale for y-axis
+    plt.legend(title="Number of Blocks", bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.tight_layout()
+    plt.savefig("images/tps_comparison.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # 5. Heatmap of correlations
+    plt.figure(figsize=(12, 10))
+    corr = df[["num_miners", "num_blocks", "avg_time", "avg_energy", "avg_tps"]].corr()
+    sns.heatmap(corr, annot=True, cmap="coolwarm", vmin=-1, vmax=1, center=0)
+    plt.title("Correlation Heatmap of Metrics")
+    plt.tight_layout()
+    plt.savefig("images/correlation_heatmap.png", dpi=300)
+    plt.close()
+
+    # 6. Distribution of metrics
+    fig, axes = plt.subplots(2, 2, figsize=(20, 20))
+    fig.suptitle("Distribution of Metrics", fontsize=20)
+
+    sns.histplot(data=df, x="avg_time", hue="consensus", multiple="stack", kde=True, ax=axes[0, 0])
+    axes[0, 0].set_title("Distribution of Average Time")
+    axes[0, 0].set_xlabel("Average Time (s)")
+    axes[0, 0].set_xscale("log")
+
+    sns.histplot(data=df, x="avg_energy", hue="consensus", multiple="stack", kde=True, ax=axes[0, 1])
+    axes[0, 1].set_title("Distribution of Average Energy")
+    axes[0, 1].set_xlabel("Average Energy (kWh)")
+    axes[0, 1].set_xscale("log")
+
+    sns.histplot(data=df, x="avg_tps", hue="consensus", multiple="stack", kde=True, ax=axes[1, 0])
+    axes[1, 0].set_title("Distribution of Average TPS")
+    axes[1, 0].set_xlabel("Average TPS")
+    axes[1, 0].set_xscale("log")
+
+    sns.scatterplot(
+        data=df, x="num_miners", y="num_blocks", hue="consensus", size="avg_tps", sizes=(20, 500), ax=axes[1, 1]
+    )
+    axes[1, 1].set_title("Number of Miners vs Number of Blocks (size: Avg TPS)")
+    axes[1, 1].set_xlabel("Number of Miners")
+    axes[1, 1].set_ylabel("Number of Blocks")
+    axes[1, 1].set_xscale("log")
+    axes[1, 1].set_yscale("log")
+
+    plt.tight_layout()
+    plt.savefig("images/metric_distributions.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print("All plots have been saved in the 'images' folder.")
 
 
 async def run_algorand(num_miners, num_blocks, num_transactions):
@@ -64,6 +170,7 @@ async def run_algorand(num_miners, num_blocks, num_transactions):
 
     times = []
     tps = []
+    energy_consumptions = []
 
     for block_index in range(num_blocks):
         sender = hashlib.sha256(f"{random.choice(accounts).verify_key}".encode()).hexdigest()
@@ -86,12 +193,15 @@ async def run_algorand(num_miners, num_blocks, num_transactions):
         times.append(time_consumption)
         tps.append(num_transactions / time_consumption)
 
+        block_energy = len(transactions) * ALGORAND_ENERGY_PER_TRANSACTION
+        energy_consumptions.append(block_energy)
+
         print(f"Algorand Block Index: {block_index}")
         print(f"Block Info: {block}")
         print(f"Time consumption: {time_consumption}")
         print("=====================")
 
-    return "algorand", times, tps, algorand, accounts
+    return "algorand", times, tps, energy_consumptions, algorand, accounts
 
 
 async def run_pow(num_miners, num_blocks, num_transactions):
@@ -100,6 +210,7 @@ async def run_pow(num_miners, num_blocks, num_transactions):
 
     times = []
     tps = []
+    energy_consumptions = []
 
     for block_index in range(num_blocks):
         sender = hashlib.sha256(f"{random.choice(miners).address}".encode()).hexdigest()
@@ -122,12 +233,18 @@ async def run_pow(num_miners, num_blocks, num_transactions):
         times.append(time_consumption)
         tps.append(num_transactions / time_consumption)
 
+        # Calculate energy consumption for this block
+        total_hash_rate = sum(miner.hash_rate for miner in miners)
+        hashes_performed = total_hash_rate * time_consumption
+        block_energy = hashes_performed * POW_ENERGY_PER_HASH
+        energy_consumptions.append(block_energy)
+
         print(f"PoW Block Index: {block_index}")
         print(f"Block Info: {block}")
         print(f"Time consumption: {time_consumption}")
         print("=====================")
 
-    return "pow", times, tps, pow, miners
+    return "pow", times, energy_consumptions, tps, pow, miners
 
 
 async def compare_consensus_mechanisms(num_miners: int, num_blocks: int, num_transactions=50):
@@ -139,42 +256,52 @@ async def compare_consensus_mechanisms(num_miners: int, num_blocks: int, num_tra
     results = await asyncio.gather(algorand_task, pow_task)
 
     # Process results
-    results_dict = {}
+    results_list = []
     for (
         consensus_type,
         times,
+        energy_consumptions,
         tps,
         chain,
         users,
     ) in results:
-        avg_time = sum(times) / len(times)
-        avg_tps = sum(tps) / len(tps)
+        total_time = sum(times)
+        total_energy = sum(energy_consumptions)
 
-        if consensus_type == "algorand":
-            energy_usage = avg_time * num_blocks
-            decentralization = num_miners
-        elif consensus_type == "pow":
-            energy_usage = avg_time * num_blocks * num_miners
-            decentralization = num_miners
+        avg_time = total_time / num_blocks
+        avg_energy = total_energy / num_blocks
+        avg_tps = num_transactions / avg_time
 
-        results_dict[consensus_type] = {
-            "times": times,
-            "tps": tps,
-            "avg_time": avg_time,
-            "energy_usage": energy_usage,
-            "decentralization": decentralization,
-            "avg_tps": avg_tps,
-        }
+        results_list.append(
+            {
+                "consensus": consensus_type,
+                "num_miners": num_miners,
+                "num_blocks": num_blocks,
+                "times": times,
+                "total_time": total_time,
+                "avg_time": avg_time,
+                "energy": energy_consumptions,
+                "total_energy": total_energy,
+                "avg_energy": avg_energy,
+                "tps": tps,
+                "avg_tps": avg_tps,
+                "chain": chain,
+                "users": users,
+            }
+        )
 
-    return results_dict
+    return results_list
 
 
 async def main():
-    for num_miners in [100]:
-        for num_blocks in [100]:
+    results = []
+    for num_miners in [100, 1_000, 10_000]:
+        for num_blocks in [100, 1_000, 10_000]:
             print(f"Running comparison with {num_miners} miners and {num_blocks} blocks")
-            results = await compare_consensus_mechanisms(num_miners=num_miners, num_blocks=num_blocks)
-            pprint(results)
+            result = await compare_consensus_mechanisms(num_miners=num_miners, num_blocks=num_blocks)
+            results.append(result)
+
+    plot_comparisons(results)
 
 
 if __name__ == "__main__":
