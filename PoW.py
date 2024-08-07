@@ -47,7 +47,7 @@ class Block:
 
 
 class Blockchain:
-    def __init__(self, initial_difficulty: int = 4, target_block_time: int = 10):
+    def __init__(self, initial_difficulty: int, target_block_time: int):
         self.chain: List[Block] = []
         self.difficulty = initial_difficulty
         self.target_block_time = target_block_time
@@ -79,9 +79,11 @@ class Blockchain:
         )
 
     def adjust_difficulty(self):
-        if len(self.chain) % 2 == 0:
-            last_two_blocks = self.chain[-2:]
-            average_time = last_two_blocks[1].timestamp - last_two_blocks[0].timestamp
+        if len(self.chain) % 5 == 0:
+            last_five_blocks = self.chain[-5:]
+            average_time = (
+                last_five_blocks[-1].timestamp - last_five_blocks[0].timestamp
+            ) / 5
 
             if average_time < self.target_block_time:
                 self.difficulty += 1
@@ -128,8 +130,8 @@ class ProofOfWork(Blockchain):
     def __init__(
         self,
         miners: List[Miner],
-        initial_difficulty: int = 4,
-        target_block_time: int = 10,
+        initial_difficulty: int,
+        target_block_time: int,
         initial_reward: float = 50,
     ):
         self.miners = miners

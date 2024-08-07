@@ -11,18 +11,22 @@ from PoW import Miner, ProofOfWork
 from transaction import generate_transactions
 import numpy as np
 
-ALGORAND_ENERGY_PER_TRANSACTION = 0.000003  # kWh per transaction
-POW_ENERGY_PER_HASH = 0.000001  # kWh per hash
-POS_ENERGY_PER_VALIDATION = 0.000055  # kWh per validation
+ALGORAND_ENERGY_PER_TRANSACTION = (
+    0.000000539  # kWh per transaction (source: Algorand Foundation)
+)
+POS_ENERGY_PER_VALIDATION = 0.000001  # kWh per validation (estimated)
+POW_ENERGY_PER_HASH = 0.000000001  # kWh per hash (estimated for modern ASIC miners)
+NETWORK_OVERHEAD_FACTOR = 1.1  # 10% additional energy for network overhead
 
 
 async def run_pos(num_validators, num_blocks):
     # Create validators for PoS
     validators = [
-        Validator(stake=random.randint(1_000, 100_000_000))
-        for _ in range(num_validators)
+        Validator(stake=random.randint(64000, 200000000)) for _ in range(num_validators)
     ]
     pos = ProofOfStake(validators, initial_supply=1_000_000, inflation_rate=0.02)
+
+    total_stake = sum(validator.stake for validator in validators)
 
     # Lists to store time, tps, and energy consumption for each block
     times = []
@@ -47,7 +51,13 @@ async def run_pos(num_validators, num_blocks):
         tps.append(len(txns) / time_consumption)
 
         # Energy consumption for PoS: each validator consumes energy to validate
-        block_energy = len(pos.validators) * POS_ENERGY_PER_VALIDATION
+        block_energy = (
+            sum(
+                validator.stake / total_stake * POS_ENERGY_PER_VALIDATION
+                for validator in validators
+            )
+            * NETWORK_OVERHEAD_FACTOR
+        )
         energy_consumptions.append(block_energy)
 
         # Update progress bar
@@ -71,7 +81,7 @@ async def run_pos(num_validators, num_blocks):
 async def run_algorand(num_miners, num_blocks):
     # Create accounts for miners
     accounts = [
-        Account(stake=random.randint(1_000, 100_000_000)) for _ in range(num_miners)
+        Account(stake=random.randint(64000, 200000000)) for _ in range(num_miners)
     ]
     algorand = Algorand(accounts, initial_supply=1_000_000, inflation_rate=0.02)
 
@@ -121,10 +131,7 @@ async def run_algorand(num_miners, num_blocks):
 
 async def run_pow(num_miners, num_blocks):
     # Create miners with random hash rates
-    miners = [
-        Miner(hash_rate=random.randint(1_000_000, 1_000_000_000))
-        for _ in range(num_miners)
-    ]
+    miners = [Miner(hash_rate=random.uniform(30e12, 1e18)) for _ in range(num_miners)]
     pow = ProofOfWork(
         miners,
         initial_difficulty=1,
@@ -155,8 +162,8 @@ async def run_pow(num_miners, num_blocks):
 
         # Energy consumption for PoW: based on total hash rate and time
         total_hash_rate = sum(miner.hash_rate for miner in miners)
-        hashes_performed = total_hash_rate * time_consumption
-        block_energy = hashes_performed * POW_ENERGY_PER_HASH
+        hashes_performed = total_hash_rate * time_consumption * pow.difficulty
+        block_energy = hashes_performed * POW_ENERGY_PER_HASH * NETWORK_OVERHEAD_FACTOR
         energy_consumptions.append(block_energy)
 
         # Update progress bar
