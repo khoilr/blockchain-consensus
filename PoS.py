@@ -1,28 +1,25 @@
 import hashlib
 import random
 import time
-from typing import List, Optional
-
-import numpy as np
+from typing import List
 
 from transaction import Transaction
 
 
 class Block:
-    def __init__(
-        self, validator: str, transactions: List[Transaction], previous_hash: str
-    ):
+    def __init__(self, validator: str, txns: List[Transaction], previous_hash: str):
         self.validator = validator
-        self.transactions = transactions
+        self.txns = txns
         self.previous_hash = previous_hash
         self.timestamp = int(time.time())
         self.hash = self.calculate_hash()
-        self.total_fees = sum(tx.fee for tx in transactions)
+        self.total_fees = sum(tx.fee for tx in txns)
+        self.votes = {}  # To store votes from validators
 
     def calculate_hash(self) -> str:
         block_data = (
             str(self.validator)
-            + "".join(tx.to_bytes().decode() for tx in self.transactions)
+            + "".join(tx.to_bytes().decode() for tx in self.txns)
             + str(self.previous_hash)
             + str(self.timestamp)
         )
@@ -34,13 +31,7 @@ class Block:
         )
 
     def __repr__(self) -> str:
-        return f"""Block (
-                    timestamp: {self.timestamp},
-                    validator: {self.validator},
-                    previous_hash: {self.previous_hash},
-                    hash: {self.hash},
-                    total_fees: {self.total_fees}
-                )"""
+        return f"Block (timestamp={self.timestamp}, hash={self.hash[:8]}, previous_hash={self.previous_hash[:8]}, num_txns={len(self.txns)})"
 
 
 class Blockchain:
@@ -73,15 +64,14 @@ class Validator:
     def __init__(self, stake: float):
         self.address = hashlib.sha256(bytes(str(time.time()), "utf-8")).hexdigest()
         self.stake = stake
-        self.slash_count = 0
         self.total_rewards = 0
+        self.is_active = True
+        self.consecutive_misses = 0
 
-    def propose_block(
-        self, transactions: List[Transaction], previous_hash: str
-    ) -> Block:
+    def propose_block(self, txns: List[Transaction], previous_hash: str) -> Block:
         return Block(
             validator=self.address,
-            transactions=transactions,
+            txns=txns,
             previous_hash=previous_hash,
         )
 
@@ -101,6 +91,11 @@ class ProofOfStake(Blockchain):
         self.total_supply = initial_supply
         self.inflation_rate = inflation_rate
         self.last_finalized_block = 0
+        self.epoch_length = 100
+        self.slashing_percentage = 0.01
+        self.min_stake = 1000  # Minimum stake to become a validator
+        self.max_validators = 100  # validators
+        self.consensus_threshold = 2 / 3
 
     @property
     def total_stake(self) -> float:
@@ -109,69 +104,144 @@ class ProofOfStake(Blockchain):
     @property
     def block_reward(self) -> float:
         """Calculate the block reward based on inflation rate."""
-        return (self.total_supply * self.inflation_rate) / 365 * 24
+        return (self.total_supply * self.inflation_rate) / (365 * 24 * 60 * 60)
 
     def select_validator(self) -> Validator:
-        """Select a validator based on their stake."""
-        selection_point = random.uniform(0, self.total_stake)
+        active_validators = [
+            v for v in self.validators if v.is_active and v.stake >= self.min_stake
+        ]
+        random.shuffle(active_validators)
+
+        if not active_validators:
+            return None
+
+        selection_point = random.uniform(0, sum(v.stake for v in active_validators))
         current_point = 0
-        for validator in self.validators:
+        for validator in active_validators:
             current_point += validator.stake
             if current_point > selection_point:
                 return validator
-        return self.validators[-1]  # Fallback to last validator if something goes wrong
 
-    def propose_block(self, transactions: List[Transaction]) -> None:
-        """Propose a new block to be added to the chain."""
+        return active_validators[-1]
+
+    def mine_block(self, txns: List[Transaction]) -> Block:
+        proposed_block = self.propose_block(txns)
+        self.epoch_based_reconfiguration()
+
+        if proposed_block and self.finalize_block(proposed_block):
+            return proposed_block
+
+    def propose_block(self, txns: List[Transaction]) -> Block:
         proposer = self.select_validator()
-        previous_hash = self.chain[-1].hash if self.chain else None
-        new_block = proposer.propose_block(transactions, previous_hash)
-        if self.validate_block(new_block):
-            self.chain.append(new_block)
-            self.distribute_rewards(proposer, new_block)
-            print(f"Block {len(self.chain)} added by {proposer.address[:8]}")
-        else:
-            print(f"Block proposed by {proposer.address[:8]} is invalid")
+        if not proposer:
+            return None
 
-    def validate_block(self, block: Block) -> bool:
-        """Validate a proposed block."""
-        if len(self.chain) > 0 and block.previous_hash != self.chain[-1].hash:
-            return False
-        if block.timestamp <= self.chain[-1].timestamp:
+        previous_block = self.get_last_block()
+        new_block = Block(
+            txns=txns,
+            previous_hash=previous_block.hash,
+            validator=proposer.address,
+        )
+
+        if self.validate_block(new_block, previous_block):
+            return new_block
+
+        return None
+
+    def vote_on_block(self, block: Block) -> bool:
+        total_votes = 0
+        for validator in self.validators:
+            if validator.is_active:
+                # In a real system, validators would check the block's validity here
+                if random.random() < 0.80:  # 99% chance to vote yes if active
+                    block.votes[validator.address] = validator.stake
+                    total_votes += validator.stake
+
+        return total_votes / self.total_stake >= self.consensus_threshold
+
+    def validate_block(self, block: Block, previous_block: Block) -> bool:
+        if len(self.chain) > 0 and block.previous_hash != previous_block.hash:
             return False
         if block.hash != block.calculate_hash():
             return False
+
         proposer = next(
             (v for v in self.validators if v.address == block.validator), None
         )
-        if not proposer or proposer.stake <= 0:
+        if not proposer or not proposer.is_active or proposer.stake < self.min_stake:
             return False
+
         return True
 
     def distribute_rewards(self, proposer: Validator, block: Block) -> None:
-        """Distribute rewards to the block proposer."""
-        reward = self.block_reward + sum(tx.fee for tx in block.transactions)
-        proposer.stake += reward
-        proposer.total_rewards += reward
-        self.total_supply += self.block_reward
+        base_reward = self.block_reward
+        fee_reward = sum(tx.fee for tx in block.txns)
+        total_reward = base_reward + fee_reward
 
-    def epoch_based_reconfiguration(self, epoch_length: int = 100) -> None:
-        """Perform epoch-based reconfiguration."""
-        if len(self.chain) % epoch_length == 0:
-            print("Performing epoch-based reconfiguration...")
-            self.update_validator_set()
+        proposer_reward = total_reward * 0.7  # 70% to proposer
+        voter_reward = total_reward * 0.3  # 30% to voters
+
+        proposer.stake += proposer_reward
+        proposer.total_rewards += proposer_reward
+
+        for voter, stake in block.votes.items():
+            voter_validator = next(v for v in self.validators if v.address == voter)
+            vote_share = stake / sum(block.votes.values())
+            reward = voter_reward * vote_share
+            voter_validator.stake += reward
+            voter_validator.total_rewards += reward
+
+        self.total_supply += base_reward
 
     def update_validator_set(self) -> None:
-        """Update the validator set based on current stakes."""
-        self.validators = sorted(self.validators, key=lambda v: v.stake, reverse=True)[
-            :100
-        ]  # Keep top 100 validators
+        self.validators = sorted(self.validators, key=lambda v: v.stake, reverse=True)
+        for i, validator in enumerate(self.validators):
+            validator.is_active = (
+                i < self.max_validators and validator.stake >= self.min_stake
+            )
 
-    def simulate_network_latency(self) -> float:
-        """Simulate network latency."""
-        return random.uniform(
-            0.1, 2.0
-        )  # Return a random latency between 0.1 and 2 seconds
+    def adjust_inflation_rate(self) -> None:
+        target_stake_rate = 0.67  # 67% of total supply staked
+        current_stake_rate = self.total_stake / self.total_supply
+
+        if current_stake_rate < target_stake_rate:
+            self.inflation_rate *= 1.05  # Increase inflation to incentivize staking
+        elif current_stake_rate > target_stake_rate:
+            self.inflation_rate *= (
+                0.95  # Decrease inflation to reduce staking incentive
+            )
+
+        self.inflation_rate = max(0.01, min(0.15, self.inflation_rate))
+
+    def process_slashing(self) -> None:
+        for validator in self.validators:
+            if validator.consecutive_misses >= 3:
+                slashed_amount = validator.stake * self.slashing_percentage
+
+                validator.stake -= slashed_amount
+                self.total_supply -= slashed_amount
+
+                validator.consecutive_misses = 0
+
+                if validator.stake < self.min_stake:
+                    validator.is_active = False
+
+    def finalize_block(self, block: Block) -> bool:
+        if self.vote_on_block(block):
+            self.add_block(block)
+            proposer = next(v for v in self.validators if v.address == block.validator)
+            self.distribute_rewards(proposer, block)
+            proposer.consecutive_misses = 0
+            time.sleep(random.uniform(0.1, 1))
+            return True
+
+        return False
+
+    def epoch_based_reconfiguration(self) -> None:
+        if len(self.chain) % self.epoch_length == 0:
+            self.update_validator_set()
+            self.adjust_inflation_rate()
+            self.process_slashing()
 
     def simulate_nothing_at_stake_attack(self, attacker: Validator) -> bool:
         """Simulate a Nothing-at-Stake attack."""
@@ -234,7 +304,7 @@ def simulate_pos_with_attacks():
     initial_supply = float("1000000")
     inflation_rate = float("0.02")  # 2% annual inflation
     validators = [
-        Validator(stake=float(random.randint(1000, 100000))) for _ in range(10)
+        Validator(stake=float(random.randint(1000, 10_000_000))) for _ in range(10)
     ]
     pos_blockchain = ProofOfStake(validators, initial_supply, inflation_rate)
 
@@ -242,7 +312,7 @@ def simulate_pos_with_attacks():
     successful_attacks = 0
 
     for i in range(1000):  # Simulate 1000 blocks
-        transactions = [
+        txns = [
             Transaction(
                 sender="Alice",
                 receiver="Bob",
@@ -251,22 +321,23 @@ def simulate_pos_with_attacks():
             )
             for _ in range(10)
         ]
-        latency = pos_blockchain.simulate_network_latency()
-        time.sleep(latency)
-        pos_blockchain.propose_block(transactions)
-        pos_blockchain.epoch_based_reconfiguration()
 
-        # Simulate attacks
-        if i % 10 == 0:  # Try an attack every 10 blocks
-            attack_count += 1
-            if pos_blockchain.simulate_attacks():
-                successful_attacks += 1
+        pos_blockchain.propose_block(txns)
+        pos_blockchain.epoch_based_reconfiguration()
+        pos_blockchain.finalize_block(i)
+
+        # # Simulate attacks
+        # if i % 10 == 0:  # Try an attack every 10 blocks
+        #     attack_count += 1
+        #     if pos_blockchain.simulate_attacks():
+        #         successful_attacks += 1
 
     print(f"Blockchain is valid: {pos_blockchain.is_valid()}")
     print(f"Blockchain length: {len(pos_blockchain.chain)}")
     print(f"Total supply: {pos_blockchain.total_supply}")
     print(f"Total attacks attempted: {attack_count}")
     print(f"Successful attacks: {successful_attacks}")
+
     for validator in pos_blockchain.validators:
         print(
             f"Validator {validator.address[:8]}: Stake = {validator.stake}, Total Rewards = {validator.total_rewards}"

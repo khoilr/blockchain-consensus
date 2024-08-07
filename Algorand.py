@@ -12,12 +12,12 @@ from transaction import Transaction
 class Block:
     def __init__(
         self,
-        transactions: List[Transaction],
+        txns: List[Transaction],
         previous_hash: str,
         vrf_proof,
         verify_key: VerifyingKey,
     ):
-        self.transactions = transactions
+        self.txns = txns
         self.previous_hash = previous_hash
         self.timestamp = int(time.time())
         self.vrf_proof = vrf_proof
@@ -25,7 +25,7 @@ class Block:
         self.hash = self.calculate_hash()
 
     def calculate_hash(self) -> str:
-        block_data = f"{self.transactions}{self.previous_hash}{self.timestamp}{self.vrf_proof}{self.verify_key}"
+        block_data = f"{self.txns}{self.previous_hash}{self.timestamp}{self.vrf_proof}{self.verify_key}"
         return hashlib.sha256(block_data.encode()).hexdigest()
 
     def is_valid(self, previous_hash: str):
@@ -34,13 +34,7 @@ class Block:
         )
 
     def __repr__(self):
-        return f"""Block (
-                    timestamp={self.timestamp},
-                    hash={self.hash},
-                    previous_hash={self.previous_hash},
-                    vrf_proof={self.vrf_proof},
-                    verify_key={self.verify_key},
-                )"""
+        return f"Block (timestamp={self.timestamp}, hash={self.hash[:8]}, previous_hash={self.previous_hash[:8]}, num_txns={len(self.txns)})"
 
 
 class Blockchain:
@@ -178,14 +172,16 @@ class Algorand(Blockchain):
     def propose_block(
         self,
         proposer: Account,
-        transactions: List[Transaction],
+        txns: List[Transaction],
     ) -> Block:
         previous_hash = self.get_last_block().hash
         vrf_proof, verify_key = proposer.prove(previous_hash.encode())
-        return Block(transactions, previous_hash, vrf_proof, verify_key)
+        return Block(txns, previous_hash, vrf_proof, verify_key)
 
-    def validate_block(self, block: Block, proposer: Account) -> bool:
-        if block.previous_hash != self.get_last_block().hash:
+    def validate_block(
+        self, block: Block, proposer: Account, previous_block: Block
+    ) -> bool:
+        if block.previous_hash != previous_block.hash:
             return False
         if not proposer.verify(
             block.previous_hash.encode(),
@@ -194,7 +190,6 @@ class Algorand(Blockchain):
         ):
             return False
 
-        # Additional validation checks can be added here
         return True
 
     def byzantine_agreement(
@@ -231,31 +226,6 @@ class Algorand(Blockchain):
 
         return None
 
-        # # Step 2: Certify Vote
-        # cert_votes = {block.hash: 0 for block in proposed_blocks}
-
-        # for member in committee:
-        #     if soft_votes[soft_winner] > threshold:
-        #         # If there's a clear winner in soft vote, everyone votes for it
-        #         chosen_block = soft_winner
-        #     else:
-        #         # Otherwise, vote for the block with highest hash value
-        #         chosen_block = max(
-        #             proposed_blocks, key=lambda b: hash(b.hash + str(member.stake))
-        #         )
-        #     cert_votes[chosen_block.hash] += member.stake
-
-        # cert_winner = max(cert_votes, key=cert_votes.get)
-
-        # print(cert_votes[cert_winner])
-        # print(threshold)
-
-        # # Step 3: Check for supermajority
-        # if cert_votes[cert_winner] > threshold:
-        #     return next(block for block in proposed_blocks if block.hash == cert_winner)
-
-        # If no supermajority, go to next round (in real Algorand, this would start a new BA⋆ round)
-
     def distribute_rewards(self, block: Block, committee: List[Account]):
         total_reward = self.base_reward
         proposer_reward = total_reward * 0.8  # 80% to proposer
@@ -291,7 +261,7 @@ class Algorand(Blockchain):
         proposed_blocks = []
         for proposer in proposers:
             block = self.propose_block(proposer, transactions)
-            if self.validate_block(block, proposer):
+            if self.validate_block(block, proposer, self.get_last_block()):
                 proposed_blocks.append(block)
 
         self.current_round += 1
@@ -497,6 +467,37 @@ class Algorand(Blockchain):
         attack(attacker)
         print()
 
+    def validate_chain(self) -> bool:
+        # Start from the second block (index 1) since the genesis block has no previous hash
+        for i in range(1, len(self.chain)):
+            current_block = self.chain[i]
+            previous_block = self.chain[i - 1]
+
+            # Check if the current block's previous hash matches the hash of the previous block
+            if current_block.previous_hash != previous_block.hash:
+                print(f"Invalid previous hash in block {i}")
+                return False
+
+            # Validate the block's integrity
+            proposer = next(
+                (
+                    account
+                    for account in self.accounts
+                    if account.verify_key == current_block.verify_key
+                ),
+                None,
+            )
+            if not proposer:
+                print(f"Proposer not found for block {i}")
+                return False
+
+            if not self.validate_block(current_block, proposer, previous_block):
+                print(f"Block {i} failed validation")
+                return False
+
+        print("Blockchain is valid")
+        return True
+
 
 def main():
     accounts = [Account(random.uniform(100, 10000)) for _ in range(100)]
@@ -518,6 +519,7 @@ def main():
         # if i % 10 == 0:
         #     algorand.simulate_attacks()
 
+    algorand.validate_chain()
     print(algorand)
 
 

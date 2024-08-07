@@ -4,6 +4,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Event
 from typing import List
+import asyncio
 
 from transaction import Transaction
 
@@ -13,21 +14,21 @@ class Block:
         self,
         nonce: int,
         proposer: str,
-        transactions: List[Transaction],
+        txns: List[Transaction],
         previous_hash: str,
     ):
         self.proposer = proposer
-        self.transactions = transactions
+        self.txns = txns
         self.previous_hash = previous_hash
         self.timestamp = int(time.time())
         self.nonce = nonce
         self.hash = self.calculate_hash()
-        self.total_fees = sum(tx.fee for tx in transactions)
+        self.total_fees = sum(tx.fee for tx in txns)
 
     def calculate_hash(self) -> str:
         block_data = (
             str(self.proposer)
-            + "".join(tx.to_bytes().decode() for tx in self.transactions)
+            + "".join(tx.to_bytes().decode() for tx in self.txns)
             + str(self.previous_hash)
             + str(self.nonce)
             + str(self.timestamp)
@@ -42,14 +43,7 @@ class Block:
         )
 
     def __repr__(self) -> str:
-        return f"""Block (
-                    timestamp: {self.timestamp},
-                    nonce: {self.nonce},
-                    proposer: {self.proposer},
-                    previous_hash: {self.previous_hash},
-                    hash: {self.hash},
-                    total_fees: {self.total_fees}
-                )"""
+        return f"Block (timestamp={self.timestamp}, hash={self.hash[:8]}, previous_hash={self.previous_hash[:8]}, num_txns={len(self.txns)})"
 
 
 class Blockchain:
@@ -85,15 +79,9 @@ class Blockchain:
         )
 
     def adjust_difficulty(self):
-        if len(self.chain) % 10 == 0:  # Adjust difficulty every 10 blocks
-            last_ten_blocks = self.chain[-10:]
-            average_time = (
-                sum(
-                    b.timestamp - a.timestamp
-                    for a, b in zip(last_ten_blocks[:-1], last_ten_blocks[1:])
-                )
-                / 9
-            )
+        if len(self.chain) % 2 == 0:
+            last_two_blocks = self.chain[-2:]
+            average_time = last_two_blocks[1].timestamp - last_two_blocks[0].timestamp
 
             if average_time < self.target_block_time:
                 self.difficulty += 1
@@ -105,10 +93,10 @@ class Miner:
     def __init__(self, hash_rate, is_malicious=False):
         self.address = hashlib.sha256(bytes(str(time.time()), "utf-8")).hexdigest()
         self.hash_rate = hash_rate
-        self.rewards = 0
+        self.total_rewards = 0
         self.is_malicious = is_malicious
 
-    def mine(
+    async def mine(
         self,
         stop_event: Event,
         transactions: list,
@@ -121,7 +109,7 @@ class Miner:
             new_block = Block(
                 nonce=nonce,
                 proposer=self.address,
-                transactions=transactions,
+                txns=transactions,
                 previous_hash=previous_hash,
             )
             if new_block.hash.startswith(target * "0"):
@@ -142,67 +130,63 @@ class ProofOfWork(Blockchain):
         miners: List[Miner],
         initial_difficulty: int = 4,
         target_block_time: int = 10,
-        initial_reward: float = 0,
+        initial_reward: float = 50,
     ):
         self.miners = miners
         self.block_reward = initial_reward
-        self.halving_interval = 210000  # Number of blocks for reward halving
+        self.halving_interval = 210000
         super().__init__(
             initial_difficulty=initial_difficulty,
             target_block_time=target_block_time,
         )
 
-    def mine_block(self, transactions: List[Transaction]):
+    async def mine_block(self, transactions: List[Transaction]):
         previous_hash = self.get_last_block().hash
         start_nonce = 0
-        stop_event = Event()
 
-        with ThreadPoolExecutor(max_workers=len(self.miners)) as executor:
-            futures = [
-                executor.submit(
-                    miner.mine,
-                    stop_event,
-                    transactions,
-                    previous_hash,
-                    self.difficulty,
-                    start_nonce,
-                )
-                for miner in self.miners
-            ]
+        stop_event = asyncio.Event()
 
-            for future in as_completed(futures):
-                block = future.result()
-                if block:
-                    valid_count = sum(
-                        1
-                        for miner in self.miners
-                        if miner.validate_block(
-                            block=block,
-                            previous_hash=previous_hash,
-                            difficulty=self.difficulty,
-                        )
+        async def mine(miner):
+            return await miner.mine(
+                stop_event, transactions, previous_hash, self.difficulty, start_nonce
+            )
+
+        tasks = [asyncio.create_task(mine(miner)) for miner in self.miners]
+
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
+        for task in done:
+            block = task.result()
+            if block:
+                valid_count = sum(
+                    1
+                    for miner in self.miners
+                    if miner.validate_block(
+                        block=block,
+                        previous_hash=previous_hash,
+                        difficulty=self.difficulty,
                     )
-                    if valid_count > len(self.miners) / 2:
-                        self.add_block(block)
-                        self.reward_miner(block.proposer, block.total_fees)
-                        print(f"Block mined by {block.proposer[:8]}!")
-                        return block
-                    else:
-                        print(f"Block mined by {block.proposer[:8]} is invalid!")
-                        return None
+                )
+                if valid_count > len(self.miners) / 2:
+                    self.add_block(block)
+                    self.reward_miner(block.proposer, block.total_fees)
+                    stop_event.set()  # Signal other miners to stop
+                    return block
 
+        # If no block was successfully mined
+        stop_event.set()
         return None
 
     def reward_miner(self, miner_address: str, transaction_fees: float):
         miner = next(m for m in self.miners if m.address == miner_address)
         reward = self.block_reward + transaction_fees
-        miner.rewards += reward
+        miner.total_rewards += reward
 
         if self.get_new_block_index() % self.halving_interval == 0:
             self.block_reward /= 2
 
     def get_miner_rewards(self):
-        return {miner.address: miner.rewards for miner in self.miners}
+        return {miner.address: miner.total_rewards for miner in self.miners}
 
     def simulate_51_percent_attack(self, attacker: Miner):
         """Simulate a 51% attack."""
@@ -293,7 +277,7 @@ class ProofOfWork(Blockchain):
             return self.simulate_double_spending(attacker)
 
 
-def simulate_pow_with_attacks():
+async def simulate_pow_with_attacks():
     honest_miners = [Miner(hash_rate=random.randint(10, 100)) for _ in range(4)]
     attacker = Miner(hash_rate=300, is_malicious=True)  # Attacker with high hash rate
     miners = honest_miners + [attacker]
@@ -307,7 +291,7 @@ def simulate_pow_with_attacks():
     attack_count = 0
     successful_attacks_count = 0
 
-    for _ in range(100):  # Simulate 100 blocks
+    for i in range(100):  # Simulate 100 blocks
         transactions = [
             Transaction(
                 sender="Alice",
@@ -317,13 +301,14 @@ def simulate_pow_with_attacks():
             )
             for _ in range(10)
         ]
-        pow_blockchain.mine_block(transactions)
+        block = await pow_blockchain.mine_block(transactions)
+        print(i, block)
 
-        # Attempt an attack every 10 blocks
-        if _ % 10 == 0:
-            attack_count += 1
-            if pow_blockchain.simulate_attacks():
-                successful_attacks_count += 1
+        # # Attempt an attack every 10 blocks
+        # if _ % 10 == 0:
+        #     attack_count += 1
+        #     if pow_blockchain.simulate_attacks():
+        #         successful_attacks_count += 1
 
     print(f"Blockchain is valid: {pow_blockchain.is_valid()}")
     print(f"Blockchain length: {len(pow_blockchain.chain)}")
@@ -336,4 +321,4 @@ def simulate_pow_with_attacks():
 
 
 if __name__ == "__main__":
-    simulate_pow_with_attacks()
+    asyncio.run(simulate_pow_with_attacks())
