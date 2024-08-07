@@ -1,12 +1,9 @@
 import hashlib
 import math
-from pprint import pprint
 import time
-from decimal import Decimal
 import random
 from typing import List
 
-import numpy as np
 from ecdsa import SECP256k1, SigningKey, VerifyingKey
 
 from transaction import Transaction
@@ -83,7 +80,7 @@ class Account:
         self.stake = stake
         self.total_rewards = 0
 
-    def generate_keypair(self):
+    def generate_key_pair(self):
         return self.signing_key.to_string().hex(), self.verify_key.to_string().hex()
 
     def prove(self, message):
@@ -107,49 +104,6 @@ class Account:
 
     def __repr__(self):
         return f"Account(verify_key={self.verify_key.to_string().hex()})"
-
-
-# class Algorand(Blockchain):
-#     def __init__(self, accounts: List[Account]):
-#         self.accounts = accounts
-#         self.current_round = 0
-
-#         super().__init__()
-
-#     @property
-#     def total_stake(self):
-#         return sum(account.stake for account in self.accounts)
-
-#     @property
-#     def committee_size(self):
-#         return math.isqrt(len(self.accounts))
-
-#     def select_committee(self, seed, round_number):
-#         committee = []
-#         total_stake = self.total_stake
-
-#         for account in self.accounts:
-#             signature, verify_key = account.prove(
-#                 seed + round_number.to_bytes(8, "big")
-#             )
-#             vrf_output = int(signature, 16)
-#             probability = Decimal(account.stake) / Decimal(total_stake)
-#             threshold = int(probability * 2**256)
-
-#             if vrf_output < threshold:
-#                 committee.append(account)
-
-#         # If the committee is empty, use weighted choice based on stake
-#         if not committee:
-#             stakes = [account.stake for account in self.accounts]
-#             probabilities = [stake / total_stake for stake in stakes]
-
-#             while len(committee) < self.committee_size:
-#                 selected = np.random.choice(self.accounts, p=probabilities)
-#                 if selected not in committee:
-#                     committee.append(selected)
-
-#         return committee
 
 
 class Algorand(Blockchain):
@@ -255,41 +209,52 @@ class Algorand(Blockchain):
         threshold = total_stake * 2 / 3
 
         # Step 1: Soft Vote
-        soft_votes = {block.hash: 0 for block in proposed_blocks}
+        votes = {block.hash: 0 for block in proposed_blocks}
 
         for member in committee:
             chosen_block = max(
-                proposed_blocks, key=lambda b: hash(b.hash + str(member.stake))
+                proposed_blocks,
+                key=lambda b: hash(b.hash + str(member.stake)),
             )
-            soft_votes[chosen_block.hash] += member.stake
+            votes[chosen_block.hash] += member.stake
 
-        soft_winner = max(soft_votes, key=soft_votes.get)
-
-        # Step 2: Certify Vote
-        cert_votes = {block.hash: 0 for block in proposed_blocks}
+        winner = max(votes, key=votes.get)
+        winner_stake = 0
 
         for member in committee:
-            if soft_votes[soft_winner] > threshold:
-                # If there's a clear winner in soft vote, everyone votes for it
-                chosen_block = soft_winner
-            else:
-                # Otherwise, vote for the block with highest hash value
-                chosen_block = max(
-                    proposed_blocks, key=lambda b: hash(b.hash + str(member.stake))
-                )
-            cert_votes[chosen_block.hash] += member.stake
+            propose = random.choices([True, False], weights=[0.8, 0.2], k=1)[0]
+            if propose:
+                winner_stake += member.stake
 
-        cert_winner = max(cert_votes, key=cert_votes.get)
+        if winner_stake > threshold:
+            return next(block for block in proposed_blocks if block.hash == winner)
 
-        print(cert_votes[cert_winner])
-        print(threshold)
+        return None
 
-        # Step 3: Check for supermajority
-        if cert_votes[cert_winner] > threshold:
-            return next(block for block in proposed_blocks if block.hash == cert_winner)
+        # # Step 2: Certify Vote
+        # cert_votes = {block.hash: 0 for block in proposed_blocks}
+
+        # for member in committee:
+        #     if soft_votes[soft_winner] > threshold:
+        #         # If there's a clear winner in soft vote, everyone votes for it
+        #         chosen_block = soft_winner
+        #     else:
+        #         # Otherwise, vote for the block with highest hash value
+        #         chosen_block = max(
+        #             proposed_blocks, key=lambda b: hash(b.hash + str(member.stake))
+        #         )
+        #     cert_votes[chosen_block.hash] += member.stake
+
+        # cert_winner = max(cert_votes, key=cert_votes.get)
+
+        # print(cert_votes[cert_winner])
+        # print(threshold)
+
+        # # Step 3: Check for supermajority
+        # if cert_votes[cert_winner] > threshold:
+        #     return next(block for block in proposed_blocks if block.hash == cert_winner)
 
         # If no supermajority, go to next round (in real Algorand, this would start a new BA⋆ round)
-        return None
 
     def distribute_rewards(self, block: Block, committee: List[Account]):
         total_reward = self.base_reward
@@ -299,7 +264,7 @@ class Algorand(Blockchain):
         proposer = next(
             account
             for account in self.accounts
-            if account.verify_key.to_string().hex() == block.verify_key
+            if account.verify_key == block.verify_key
         )
         proposer.stake += proposer_reward
         proposer.total_rewards += proposer_reward
@@ -315,6 +280,7 @@ class Algorand(Blockchain):
         seed = hashlib.sha256(
             f"{self.get_last_block().hash}{self.current_round}".encode()
         ).digest()
+
         proposers = self.select_accounts(
             seed + b"proposer", self.proposer_threshold, True
         )
@@ -328,15 +294,16 @@ class Algorand(Blockchain):
             if self.validate_block(block, proposer):
                 proposed_blocks.append(block)
 
+        self.current_round += 1
+
         winner = self.byzantine_agreement(proposed_blocks, committee)
+
         if winner:
             self.add_block(winner)
             self.distribute_rewards(winner, committee)
-            self.current_round += 1
             return winner
-        else:
-            self.current_round += 1
-            return None
+
+        return None
 
     def simulate_51_percent_attack(self, attacker: Account):
         print("Simulating 51% attack...")
@@ -535,7 +502,7 @@ def main():
     accounts = [Account(random.uniform(100, 10000)) for _ in range(100)]
     algorand = Algorand(accounts, initial_supply=1000000, inflation_rate=0.05)
 
-    # Mine some blocks
+    # Mine 100 blocks
     for i in range(100):
         transactions = [
             Transaction(
@@ -550,6 +517,8 @@ def main():
         # print(block)
         # if i % 10 == 0:
         #     algorand.simulate_attacks()
+
+    print(algorand)
 
 
 if __name__ == "__main__":
