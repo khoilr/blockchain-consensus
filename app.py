@@ -254,8 +254,8 @@ async def main():
 
     configurations = [
         (num_entities, num_blocks)
-        for num_entities in np.logspace(1, 2, num=3, dtype=int)
-        for num_blocks in np.logspace(1, 2, num=3, dtype=int)
+        for num_entities in np.logspace(0, 1, num=3, dtype=int)
+        for num_blocks in np.logspace(0, 1, num=3, dtype=int)
     ]
 
     for num_entities, num_blocks in configurations:
@@ -263,7 +263,7 @@ async def main():
         result = await compare_consensus_mechanisms(
             num_entities=num_entities, num_blocks=num_blocks
         )
-        results.append(result)
+        results.extend(result)
         print()
 
     plot(results)

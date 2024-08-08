@@ -1,7 +1,6 @@
 import hashlib
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Event
 from typing import List
 import asyncio
