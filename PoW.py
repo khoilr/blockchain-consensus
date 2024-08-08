@@ -1,8 +1,6 @@
 import hashlib
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Event
 from typing import List
 import asyncio
 
@@ -100,7 +98,7 @@ class Miner:
 
     async def mine(
         self,
-        stop_event: Event,
+        stop_event: asyncio.Event,
         transactions: list,
         previous_hash: str,
         target: str,
