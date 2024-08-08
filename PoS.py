@@ -153,7 +153,7 @@ class ProofOfStake(Blockchain):
         for validator in self.validators:
             if validator.is_active:
                 # In a real system, validators would check the block's validity here
-                if random.random() < 0.80:  # 99% chance to vote yes if active
+                if random.random() < 0.99:  # 99% chance to vote yes if active
                     block.votes[validator.address] = validator.stake
                     total_votes += validator.stake
 

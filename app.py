@@ -135,7 +135,7 @@ async def run_pow(num_miners, num_blocks):
     pow = ProofOfWork(
         miners,
         initial_difficulty=1,
-        target_block_time=2,
+        target_block_time=1,
     )
 
     # Lists to store time, tps, and energy consumption for each block
@@ -162,7 +162,7 @@ async def run_pow(num_miners, num_blocks):
 
         # Energy consumption for PoW: based on total hash rate and time
         total_hash_rate = sum(miner.hash_rate for miner in miners)
-        hashes_performed = total_hash_rate * time_consumption * pow.difficulty
+        hashes_performed = total_hash_rate * time_consumption
         block_energy = hashes_performed * POW_ENERGY_PER_HASH * NETWORK_OVERHEAD_FACTOR
         energy_consumptions.append(block_energy)
 
@@ -254,8 +254,8 @@ async def main():
 
     configurations = [
         (num_entities, num_blocks)
-        for num_entities in np.logspace(0, 1, num=3, dtype=int)
-        for num_blocks in np.logspace(0, 1, num=3, dtype=int)
+        for num_entities in np.logspace(0, 2, num=10, dtype=int)
+        for num_blocks in np.logspace(0, 2, num=10, dtype=int)
     ]
 
     for num_entities, num_blocks in configurations:
