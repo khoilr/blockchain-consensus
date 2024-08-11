@@ -1,4 +1,5 @@
 {
     "clock.active": true,
-    "cSpell.words": ["SECP"]
+    "cSpell.words": ["SECP"],
+    "codium.codeCompletion.enable": false
 }
